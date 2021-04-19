@@ -18,6 +18,7 @@ package org.terracotta.management.model.cluster;
 import org.terracotta.management.model.context.Context;
 
 import java.time.Clock;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -320,7 +321,7 @@ public final class Server extends AbstractNode<Stripe> {
   @Override
   public Map<String, Object> toMap() {
     Map<String, Object> map = super.toMap();
-    map.put("serverEntities", serverEntityStream().sorted((o1, o2) -> o1.getId().compareTo(o2.getId())).map(ServerEntity::toMap).collect(Collectors.toList()));
+    map.put("serverEntities", serverEntityStream().sorted(Comparator.comparing(AbstractNode::getId)).map(ServerEntity::toMap).collect(Collectors.toList()));
     map.put("serverName", this.getServerName());
     map.put("hostName", this.hostName);
     map.put("hostAddress", this.hostAddress);
@@ -379,6 +380,21 @@ public final class Server extends AbstractNode<Stripe> {
      * Active server is ready to receive clients
      */
     ACTIVE("ACTIVE", "ACTIVE-COORDINATOR"),
+
+    /**
+     * Active server is blocked because of consistency votes
+     */
+    ACTIVE_SUSPENDED("ACTIVE_SUSPENDED"),
+
+    /**
+     * Passive server is blocked because of consistency votes
+     */
+    PASSIVE_SUSPENDED("PASSIVE_SUSPENDED"),
+
+    /**
+     * Server startup is suspended
+     */
+    START_SUSPENDED("START_SUSPENDED"),
 
     /**
      * DC configuration mode (only diagnostic port is available)

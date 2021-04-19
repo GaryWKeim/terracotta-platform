@@ -106,6 +106,64 @@ public class ConcurrentDiagnosticServiceProvider<K> implements MultiDiagnosticSe
     }
   }
 
+  @Override
+  public DiagnosticServices<K> fetchAnyOnlineDiagnosticService(Map<K, InetSocketAddress> addresses) {
+    if (addresses.isEmpty()) {
+      return new DiagnosticServices<>(emptyMap(), emptyMap());
+    }
+
+    ExecutorService executor = Executors.newFixedThreadPool(
+      concurrencySizing.getThreadCount(addresses.size()),
+      r -> new Thread(r, "diagnostics-connect"));
+
+    try {
+      CompletionService<Tuple3<K, DiagnosticService, DiagnosticServiceProviderException>> completionService = new ExecutorCompletionService<>(executor);
+
+      // start all the fetches, record error if any
+      TimeBudget timeBudget = new TimeBudget(connectionTimeout.toMillis(), MILLISECONDS);
+      addresses.forEach((id, address) -> completionService.submit(() -> {
+        try {
+          DiagnosticService diagnosticService = diagnosticServiceProvider.fetchDiagnosticService(address, Duration.ofMillis(timeBudget.remaining()));
+          return tuple3(id, diagnosticService, null);
+        } catch (DiagnosticServiceProviderException e) {
+          return tuple3(id, null, e);
+        } catch (Exception e) {
+          return tuple3(id, null, new DiagnosticServiceProviderException("Failed to create diagnostic connection to " + address, e));
+        }
+      }));
+
+      Map<K, DiagnosticService> online = new HashMap<>(addresses.size());
+      Map<K, DiagnosticServiceProviderException> offline = new HashMap<>(addresses.size());
+
+      try {
+        // capture the task output
+        int count = addresses.size();
+        while (count-- > 0) {
+          // we do not need to handle any timeout here during a take or get because they are handled in the submitted tasks
+          Future<Tuple3<K, DiagnosticService, DiagnosticServiceProviderException>> completed = completionService.take();
+          Tuple3<K, DiagnosticService, DiagnosticServiceProviderException> tuple = completed.get();
+          if (tuple.t3 == null) {
+            online.put(tuple.t1, tuple.t2);
+            executor.shutdownNow();
+            break;
+          }
+        }
+      } catch (InterruptedException e) {
+        // take() has been interrupted.
+        // We need to cancel all the tasks and shutdown everything
+        shutdown(executor);
+        throw new RuntimeException(e);
+      } catch (ExecutionException e) {
+        // impossible since we catch Throwable in the submitted task
+        throw new AssertionError(e);
+      }
+
+      return new DiagnosticServices<>(online, offline);
+    } finally {
+      shutdown(executor);
+    }
+  }
+
   private void shutdown(ExecutorService executor) {
     executor.shutdown();
     try {
